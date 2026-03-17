@@ -22,6 +22,7 @@
             --divider: #e8e4d9;
             --input-bg: #f0ede4;
             --overlay: rgba(0,0,0,0.4);
+            --accent-blue: #3498db;
         }
 
         [data-theme="dark"] {
@@ -150,12 +151,26 @@
             font-size: 10px; font-weight: 800; z-index: 1;
         }
 
+        .date-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+
         .date-badge {
-            font-size: 11px;
+            font-size: 10px;
             color: var(--secondary-text);
             background: var(--input-bg);
             padding: 3px 8px;
             border-radius: 6px;
+        }
+
+        .day-counter {
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--primary);
+            text-transform: uppercase;
         }
 
         /* Modaler */
@@ -197,7 +212,6 @@
         }
 
         .btn { padding: 12px; border-radius: 12px; border: none; width: 100%; font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 10px;}
-        .vask-btn { background: var(--primary); color: white; }
         .lukk-btn { background: var(--divider); color: var(--text); }
 
         .settings-section {
@@ -275,7 +289,7 @@
         <div class="settings-section">
             <label class="settings-label">Dine seksjoner</label>
             <div id="sectionSettingsList" style="max-height: 200px; overflow-y: auto;">
-                <!-- Liste over eksisterende seksjoner med slett-mulighet her -->
+                <!-- Liste over eksisterende seksjoner -->
             </div>
         </div>
 
@@ -284,6 +298,14 @@
 </div>
 
 <script>
+    // Bruker norsk lokalitet for datoer
+    const norgFormat = new Intl.DateTimeFormat('no-NO', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+    });
+
     let data = JSON.parse(localStorage.getItem('hus_data')) || {
         sections: [
             { id: '1', name: 'Bad', tasks: [] },
@@ -307,14 +329,25 @@
         localStorage.setItem('hus_data', JSON.stringify(data));
     }
 
-    function getNowStr() {
-        const d = new Date();
-        const dag = d.getDate().toString().padStart(2, '0');
-        const mnd = (d.getMonth() + 1).toString().padStart(2, '0');
-        const år = d.getFullYear();
-        const t = d.getHours().toString().padStart(2, '0');
-        const min = d.getMinutes().toString().padStart(2, '0');
-        return `${dag}.${mnd}.${år} kl. ${t}:${min}`;
+    // Returnerer et objekt med formatert tekst og rå timestamp
+    function getTaskTimeData() {
+        const now = new Date();
+        const formatted = norgFormat.format(now);
+        // Gjør første bokstav stor (norsk Intl.DateTimeFormat starter ofte med liten)
+        const capitalize = formatted.charAt(0).toUpperCase() + formatted.slice(1);
+        return {
+            text: capitalize + " kl. " + now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0'),
+            timestamp: now.getTime()
+        };
+    }
+
+    // Regner ut dager siden sist
+    function calculateDaysSince(timestamp) {
+        if (!timestamp) return null;
+        const now = new Date().getTime();
+        const diff = now - timestamp;
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        return days;
     }
 
     function addSection() {
@@ -352,7 +385,8 @@
         section.tasks.push({
             id: Date.now().toString(),
             name: taskName,
-            lastDone: null,
+            lastDoneText: null,
+            lastDoneTimestamp: null,
             log: []
         });
         
@@ -366,10 +400,12 @@
         const taskIndex = section.tasks.findIndex(t => t.id === taskId);
         const task = section.tasks[taskIndex];
         
-        const now = getNowStr();
-        task.lastDone = now;
-        task.log.unshift(now);
+        const timeData = getTaskTimeData();
+        task.lastDoneText = timeData.text;
+        task.lastDoneTimestamp = timeData.timestamp;
+        task.log.unshift(timeData.text);
         
+        // Flytt til bunnen av listen
         section.tasks.splice(taskIndex, 1);
         section.tasks.push(task);
         
@@ -384,7 +420,7 @@
         render();
     }
 
-    // Touch Logikk
+    // Touch Logikk (Swipe + Long Press)
     let touchStartX = 0;
     let currentSwipedElement = null;
     let longPressTimer;
@@ -424,7 +460,7 @@
         }
     }
 
-    // Modal Funksjoner
+    // Modaler
     function openLog(sectionId, taskId, taskName) {
         const section = data.sections.find(s => s.id === sectionId);
         const task = section.tasks.find(t => t.id === taskId);
@@ -478,20 +514,32 @@
             </div>
             <div class="list-container">
                 ${section.tasks.length === 0 ? '<div style="padding:15px; font-size:12px; color:gray; text-align:center;">Ingen oppgaver her enda</div>' : ''}
-                ${section.tasks.map(task => `
+                ${section.tasks.map(task => {
+                    const daysSince = calculateDaysSince(task.lastDoneTimestamp);
+                    let counterText = "";
+                    if (daysSince !== null) {
+                        if (daysSince === 0) counterText = "Nylig";
+                        else if (daysSince === 1) counterText = "1 dag siden";
+                        else counterText = `${daysSince} dager siden`;
+                    }
+
+                    return `
                     <div class="swipe-container">
                         <div class="delete-btn-ios" onclick="deleteTask('${section.id}', '${task.id}')">SLETT</div>
                         <div class="swipe-content" 
                              ontouchstart="handleStart(event, this, '${section.id}', '${task.id}', '${task.name}')"
                              ontouchmove="handleMove(event, this)"
                              ontouchend="handleEnd(event, this, '${section.id}', '${task.id}')">
-                            <div style="font-weight:600;">${task.name}</div>
-                            <div class="date-badge">
-                                ${task.lastDone ? task.lastDone.split(' kl.')[0] : '(ingen dato registrert)'}
+                            <div style="font-weight:600; flex: 1; padding-right: 10px;">${task.name}</div>
+                            <div class="date-info">
+                                <div class="date-badge">
+                                    ${task.lastDoneText ? task.lastDoneText.split(' kl.')[0] : '(ingen dato)'}
+                                </div>
+                                ${counterText ? `<div class="day-counter">${counterText}</div>` : ''}
                             </div>
                         </div>
                     </div>
-                `).join('')}
+                `}).join('')}
             </div>
         `).join('');
     }
