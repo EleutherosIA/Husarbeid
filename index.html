@@ -58,6 +58,7 @@
             height: 100vh; 
             overflow: hidden;
             color: var(--text);
+            -webkit-tap-highlight-color: transparent;
         }
 
         header { 
@@ -127,6 +128,7 @@
             background-color: var(--red);
             overflow: hidden;
             user-select: none;
+            -webkit-user-select: none;
             touch-action: pan-y;
             border-bottom: 0.5px solid var(--divider);
         }
@@ -141,6 +143,7 @@
             position: relative;
             z-index: 2;
             transition: transform 0.2s ease-out;
+            cursor: pointer;
         }
 
         .delete-btn-ios {
@@ -156,6 +159,7 @@
             flex-direction: column;
             align-items: flex-end;
             gap: 4px;
+            pointer-events: none;
         }
 
         .date-badge {
@@ -204,11 +208,24 @@
         }
 
         .log-item {
-            padding: 10px 0;
+            padding: 12px 0;
             border-bottom: 1px solid var(--divider);
             font-size: 13px;
             display: flex;
             justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .log-item:active {
+            opacity: 0.6;
+        }
+
+        .edit-hint {
+            font-size: 10px;
+            color: var(--secondary-text);
+            text-align: center;
+            margin-top: 10px;
         }
 
         .btn { padding: 12px; border-radius: 12px; border: none; width: 100%; font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 10px;}
@@ -256,6 +273,7 @@
     <div class="modal-content" onclick="event.stopPropagation()">
         <h3 id="logTitle" style="margin-top:0; font-size: 16px;">Logg</h3>
         <div id="logList" class="log-list"></div>
+        <div class="edit-hint">Trykk på en dato i loggen for å redigere den.</div>
         <button class="btn lukk-btn" onclick="closeLogModal()">Lukk</button>
     </div>
 </div>
@@ -298,7 +316,6 @@
 </div>
 
 <script>
-    // Bruker norsk lokalitet for datoer
     const norgFormat = new Intl.DateTimeFormat('no-NO', {
         weekday: 'long',
         day: 'numeric',
@@ -329,11 +346,9 @@
         localStorage.setItem('hus_data', JSON.stringify(data));
     }
 
-    // Returnerer et objekt med formatert tekst og rå timestamp
     function getTaskTimeData() {
         const now = new Date();
         const formatted = norgFormat.format(now);
-        // Gjør første bokstav stor (norsk Intl.DateTimeFormat starter ofte med liten)
         const capitalize = formatted.charAt(0).toUpperCase() + formatted.slice(1);
         return {
             text: capitalize + " kl. " + now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0'),
@@ -341,7 +356,6 @@
         };
     }
 
-    // Regner ut dager siden sist
     function calculateDaysSince(timestamp) {
         if (!timestamp) return null;
         const now = new Date().getTime();
@@ -403,14 +417,43 @@
         const timeData = getTaskTimeData();
         task.lastDoneText = timeData.text;
         task.lastDoneTimestamp = timeData.timestamp;
-        task.log.unshift(timeData.text);
         
-        // Flytt til bunnen av listen
+        // Lagre loggen som objekter for enklere redigering
+        task.log.unshift({
+            text: timeData.text,
+            timestamp: timeData.timestamp
+        });
+        
         section.tasks.splice(taskIndex, 1);
         section.tasks.push(task);
         
         saveData();
         render();
+    }
+
+    function editLogEntry(sectionId, taskId, logIndex) {
+        const section = data.sections.find(s => s.id === sectionId);
+        const task = section.tasks.find(t => t.id === taskId);
+        const entry = task.log[logIndex];
+        
+        const newDateText = prompt("Rediger dato og tid:", entry.text || entry);
+        if (newDateText !== null) {
+            // Hvis loggen er gammel format (streng), konverter til objekt
+            if (typeof task.log[logIndex] === 'string') {
+                task.log[logIndex] = { text: newDateText, timestamp: Date.now() };
+            } else {
+                task.log[logIndex].text = newDateText;
+            }
+
+            // Hvis dette er den nyeste loggføringen, oppdater hovedvisningen også
+            if (logIndex === 0) {
+                task.lastDoneText = newDateText;
+            }
+            
+            saveData();
+            openLog(sectionId, taskId, task.name); // Refresh modal
+            render();
+        }
     }
 
     function deleteTask(sectionId, taskId) {
@@ -420,12 +463,14 @@
         render();
     }
 
-    // Touch Logikk (Swipe + Long Press)
+    // Touch Logikk
     let touchStartX = 0;
     let currentSwipedElement = null;
     let longPressTimer;
+    let isLongPress = false;
 
     function handleStart(e, content, sectionId, taskId, taskName) {
+        isLongPress = false;
         if (currentSwipedElement && currentSwipedElement !== content) {
             currentSwipedElement.style.transform = 'translateX(0px)';
         }
@@ -434,6 +479,7 @@
         content.style.transition = 'none';
         
         longPressTimer = setTimeout(() => {
+            isLongPress = true;
             openLog(sectionId, taskId, taskName);
         }, 600);
     }
@@ -450,11 +496,13 @@
         clearTimeout(longPressTimer);
         content.style.transition = 'transform 0.2s ease-out';
         let diff = e.changedTouches[0].clientX - touchStartX;
+        
         if (diff > 40) {
             content.style.transform = 'translateX(80px)';
         } else {
             content.style.transform = 'translateX(0px)';
-            if (Math.abs(diff) < 5) {
+            // Bare oppdater dato hvis det IKKE var et langt trykk og IKKE en swipe
+            if (!isLongPress && Math.abs(diff) < 5) {
                 updateTaskDate(sectionId, taskId);
             }
         }
@@ -466,15 +514,18 @@
         const task = section.tasks.find(t => t.id === taskId);
         document.getElementById('logTitle').innerText = `Logg: ${taskName}`;
         const logList = document.getElementById('logList');
+        
         if (task.log.length === 0) {
             logList.innerHTML = '<div style="padding:20px; text-align:center; font-size:13px; color:gray;">Ingen historikk registrert enda.</div>';
         } else {
-            logList.innerHTML = task.log.map((entry, i) => `
-                <div class="log-item">
-                    <span>${i === 0 ? 'Sist gjort:' : 'Utført:'}</span>
-                    <span>${entry}</span>
+            logList.innerHTML = task.log.map((entry, i) => {
+                const displayText = typeof entry === 'string' ? entry : entry.text;
+                return `
+                <div class="log-item" onclick="editLogEntry('${sectionId}', '${taskId}', ${i})">
+                    <span style="color:var(--secondary-text); font-size: 11px;">${i === 0 ? 'SIST:' : 'UTFØRT:'}</span>
+                    <span style="font-weight: 500;">${displayText}</span>
                 </div>
-            `).join('');
+            `}).join('');
         }
         document.getElementById('logModal').style.display = 'flex';
     }
